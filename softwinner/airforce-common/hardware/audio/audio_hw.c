@@ -106,6 +106,14 @@ enum tty_modes {
     TTY_MODE_FULL
 };
 
+enum {
+    TAS5711_SET_MASTER_VOLUME = 0,
+    TAS5711_GET_MASTER_VOLUME = 1,
+    TAS5711_SET_POWER          = 2,
+    TAS5711_SET_MUTE           = 3,
+    TAT5711_CMD_MAX_NUM        = 252,
+};
+
 struct pcm_config pcm_config_mm_out = {
     .channels = 2,
     .rate = MM_SAMPLING_RATE,
@@ -176,6 +184,7 @@ struct sunxi_audio_device {
     bool in_record;
     bool bluetooth_voice;
 	bool af_capture_flag;
+	int tas5711_fd;
 	struct pcm_buf_manager PcmManager;
 };
 
@@ -2385,6 +2394,44 @@ static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
         }
     }
 
+    ret = str_parms_get_str(parms, AUDIO_PARAMETER_TAS5711_POWER, value, sizeof(value));
+    if (ret >= 0) {
+	    int val = atoi(value);
+        if(val == 1 || val == 0){
+            if(adev->tas5711_fd < 0){
+                adev->tas5711_fd = open("/dev/tas5711", O_RDWR);
+                if(adev->tas5711_fd < 0){
+                     ALOGD("open tas5711 device fail,cannt set tas5711 power");
+   	            }
+            }
+			if(!(adev->tas5711_fd < 0)){
+				unsigned long args[4] = {0};
+				args[0] = val;
+                ret = ioctl(adev->tas5711_fd,TAS5711_SET_POWER, (unsigned long)args);
+            }
+        }
+    }
+
+	ret = str_parms_get_str(parms, AUDIO_PARAMETER_TAS5711_MASTER_VOLUME, value, sizeof(value));
+    if (ret >= 0) {
+	    int val = atoi(value);
+        if (val >= 0 && val < 16) {
+            if(adev->tas5711_fd < 0){
+                adev->tas5711_fd = open("/dev/tas5711", O_RDWR);
+                if(adev->tas5711_fd < 0){
+                     ALOGD("open tas5711 device fail,cannt set tas5711 master volume");
+   	            }
+            }
+			if(!(adev->tas5711_fd < 0)){
+				unsigned long args[4] = {0};
+				args[0] = val;
+                ret = ioctl(adev->tas5711_fd,TAS5711_SET_MASTER_VOLUME, (unsigned long)args);
+            }
+        }else {
+            ALOGE("set tas5711 master volume,invalid volume value");
+        }
+    }
+
     str_parms_destroy(parms);
     return ret;
 }
@@ -2687,6 +2734,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->bluetooth_nrec 	= false;
     adev->wb_amr 			= 0;
     adev->fm_mode = 2;
+	adev->tas5711_fd = -1;
 
     pthread_mutex_unlock(&adev->lock);
 
