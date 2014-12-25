@@ -45,7 +45,7 @@
 #include "lowpass.h" //add by xzd
 #define F_LOG ALOGV("%s, line: %d", __FUNCTION__, __LINE__);
 
-#define USERECORD_44100_SAMPLERATE
+#define USERECORD_4800_SAMPLERATE
 int call_flag = 0;
 
 /* ALSA cards for A1X */
@@ -113,7 +113,6 @@ enum {
     TAS5711_SET_MUTE           = 3,
     TAT5711_CMD_MAX_NUM        = 252,
 };
-
 struct pcm_config pcm_config_mm_out = {
     .channels = 2,
     .rate = MM_SAMPLING_RATE,
@@ -124,7 +123,7 @@ struct pcm_config pcm_config_mm_out = {
 
 struct pcm_config pcm_config_mm_in = {
     .channels = 2,
-    .rate = MM_SAMPLING_RATE,
+    .rate = SAMPLING_RATE_8K,
     .period_size = 1024,
     .period_count = CAPTURE_PERIOD_COUNT,
     .format = PCM_FORMAT_S16_LE,
@@ -185,6 +184,8 @@ struct sunxi_audio_device {
     bool bluetooth_voice;
 	bool af_capture_flag;
 	int tas5711_fd;
+	int in_req_channels;
+	//FILE *fd;
 	struct pcm_buf_manager PcmManager;
 };
 
@@ -1552,7 +1553,7 @@ static int start_input_stream(struct sunxi_stream_in *in)
         adev->in_device = in->device;
         select_input_device(adev);
     //}
-
+    adev->in_req_channels = in->config.channels;
     if (in->need_echo_reference && in->echo_reference == NULL)
         in->echo_reference = get_echo_reference(adev,
                                         AUDIO_FORMAT_PCM_16_BIT,
@@ -1561,8 +1562,8 @@ static int start_input_stream(struct sunxi_stream_in *in)
 
 	int in_ajust_rate = in->requested_rate;
 	// out/in stream should be both 44.1K serial
-#ifdef USERECORD_44100_SAMPLERATE
-	in_ajust_rate = SAMPLING_RATE_48K;//
+#ifdef USERECORD_4800_SAMPLERATE
+	in_ajust_rate = SAMPLING_RATE_48K;
 #else	
 	if (!(in->requested_rate % SAMPLING_RATE_11K))
 	{
@@ -1572,14 +1573,14 @@ static int start_input_stream(struct sunxi_stream_in *in)
 	else
 	{
 		in_ajust_rate = SAMPLING_RATE_11K * in->requested_rate / SAMPLING_RATE_8K;
-		if (in_ajust_rate > SAMPLING_RATE_44K)
+		if (in_ajust_rate > SAMPLING_RATE_48K)
 		{
-			in_ajust_rate = SAMPLING_RATE_44K;
+			in_ajust_rate = SAMPLING_RATE_48K;
 		}
-		ALOGV("out/in stream should be both 44.1K serial, force capture rate: %d", in_ajust_rate);
+		ALOGV("out/in stream should be both 48K serial, force capture rate: %d", in_ajust_rate);
 	}
 #endif
-ALOGV("in_ajust_rate:%d", in_ajust_rate);
+    ALOGV("in_ajust_rate:%d", in_ajust_rate);
 	in->pcm = pcm_open_req(0, PORT_CODEC, PCM_IN, &in->config, in_ajust_rate);
 
     if (!pcm_is_ready(in->pcm)) {
@@ -2145,7 +2146,22 @@ static ssize_t in_read(struct audio_stream_in *stream, void* buffer,
     if (in->num_preprocessors != 0) {
         ret = read_frames(in, buffer, frames_rq);//ret = process_frames(in, buffer, frames_rq);
     } else if (in->resampler != NULL) {
-        ret = read_frames(in, buffer, frames_rq);
+		if(adev->in_req_channels == 1){
+			ret = read_frames(in, buffer, frames_rq*2);
+			char *ch_buf = (char *)buffer;
+			size_t i;
+			for (i = 0; i < frames_rq*2; i++) // downmix, left channel only
+			{
+				ch_buf[2 * i + 0] = ch_buf[4 * i + 0];
+				ch_buf[2 * i + 1] = ch_buf[4 * i + 1];
+			}
+			//if(adev->fd == NULL){
+ 			//	adev->fd = fopen("/data/camera/d.pcm","wb");
+			//}
+			//ret = fwrite(buffer,1,bytes,adev->fd);
+		}else {
+			ret = read_frames(in, buffer, frames_rq);
+		}
 	} else {
         ret = pcm_read(in->pcm, buffer, bytes);
 	}
@@ -2396,41 +2412,40 @@ static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
 
     ret = str_parms_get_str(parms, AUDIO_PARAMETER_TAS5711_POWER, value, sizeof(value));
     if (ret >= 0) {
-	    int val = atoi(value);
-        if(val == 1 || val == 0){
-            if(adev->tas5711_fd < 0){
-                adev->tas5711_fd = open("/dev/tas5711", O_RDWR);
-                if(adev->tas5711_fd < 0){
-                     ALOGD("open tas5711 device fail,cannt set tas5711 power");
-   	            }
-            }
+		int val = atoi(value);
+		if(val == 1 || val == 0){
+			if(adev->tas5711_fd < 0){
+				adev->tas5711_fd = open("/dev/tas5711", O_RDWR);
+				if(adev->tas5711_fd < 0){
+					ALOGD("open tas5711 device fail,cannt set tas5711 power");
+				}
+			}
 			if(!(adev->tas5711_fd < 0)){
 				unsigned long args[4] = {0};
 				args[0] = val;
-                ret = ioctl(adev->tas5711_fd,TAS5711_SET_POWER, (unsigned long)args);
-            }
-        }
-    }
-
+				ret = ioctl(adev->tas5711_fd,TAS5711_SET_POWER, (unsigned long)args);
+			}
+		}
+	}
 	ret = str_parms_get_str(parms, AUDIO_PARAMETER_TAS5711_MASTER_VOLUME, value, sizeof(value));
-    if (ret >= 0) {
-	    int val = atoi(value);
-        if (val >= 0 && val < 16) {
-            if(adev->tas5711_fd < 0){
-                adev->tas5711_fd = open("/dev/tas5711", O_RDWR);
-                if(adev->tas5711_fd < 0){
-                     ALOGD("open tas5711 device fail,cannt set tas5711 master volume");
-   	            }
-            }
+	if (ret >= 0) {
+		int val = atoi(value);
+		if (val >= 0 && val < 16) {
+			if(adev->tas5711_fd < 0){
+				adev->tas5711_fd = open("/dev/tas5711", O_RDWR);
+				if(adev->tas5711_fd < 0){
+					ALOGD("open tas5711 device fail,cannt set tas5711 master volume");
+				}
+			}
 			if(!(adev->tas5711_fd < 0)){
 				unsigned long args[4] = {0};
 				args[0] = val;
-                ret = ioctl(adev->tas5711_fd,TAS5711_SET_MASTER_VOLUME, (unsigned long)args);
-            }
-        }else {
-            ALOGE("set tas5711 master volume,invalid volume value");
-        }
-    }
+				ret = ioctl(adev->tas5711_fd,TAS5711_SET_MASTER_VOLUME, (unsigned long)args);
+			}
+		}else {
+			ALOGE("set tas5711 master volume,invalid volume value");
+		}
+	}
 
     str_parms_destroy(parms);
     return ret;
@@ -2735,7 +2750,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->wb_amr 			= 0;
     adev->fm_mode = 2;
 	adev->tas5711_fd = -1;
-
+	//adev->fd                = NULL;
     pthread_mutex_unlock(&adev->lock);
 
     *device = &adev->hw_device.common;
