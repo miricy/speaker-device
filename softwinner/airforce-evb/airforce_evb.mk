@@ -143,6 +143,10 @@ PRODUCT_PROPERTY_OVERRIDES += \
        ro.sf.lcd_density=213 \
 	ro.product.firmware=v1.0rc7
 
+###
+PRODUCT_PROPERTY_OVERRIDES += \
+	testing.mediascanner.skiplist=/mnt/usbhost1/
+###
 
 $(call inherit-product-if-exists, device/softwinner/airforce-evb/modules/modules.mk)
 
